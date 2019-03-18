@@ -1,4 +1,3 @@
-  
 apiVersion: kops/v1alpha2
 kind: Cluster
 metadata:
@@ -50,13 +49,17 @@ spec:
         }
       ]
   api:
-    dns: {}
+    loadBalancer:
+      type: Public
   authorization:
     rbac: {}
   channel: stable
   cloudProvider: aws
   configBase: s3://${KOPS_STATE_STORE_BUCKET}/${CLUSTER_NAME}
   dnsZone: ${CLUSTER_NAME}
+  iam:
+    allowContainerRegistry: true
+    legacy: false
   etcdClusters:
   - etcdMembers:
     - encryptedVolume: true
@@ -82,22 +85,22 @@ spec:
   subnets:
   - name: ${REGION}a-private
     type: Private
-    zone: ${REGION}a-private
+    zone: ${REGION}a
   - name: ${REGION}b-private
     type: Private
-    zone: ${REGION}b-private
+    zone: ${REGION}b
   - name: ${REGION}c-private
     type: Private
-    zone: ${REGION}c-private
+    zone: ${REGION}c
   - name: ${REGION}a-public
     type: Public
-    zone: ${REGION}a-public
+    zone: ${REGION}a
   - name: ${REGION}b-public
     type: Public
-    zone: ${REGION}b-public
+    zone: ${REGION}b
   - name: ${REGION}c-public
     type: Public
-    zone: ${REGION}c-public
+    zone: ${REGION}c
   topology:
     bastion:
       bastionPublicName: ${BASTION_PUBLIC_NAME}
@@ -122,12 +125,9 @@ spec:
   role: Bastion
   rootVolumeSize: 8
   subnets:
-  - ${REGION}a-public
-  - ${REGION}b-public
-  - ${REGION}c-public
-  kubelet:
-    featureGates:
-      ReadOnlyAPIDataVolumes: "false"
+  - ${REGION}a-utility
+  - ${REGION}b-utility
+  - ${REGION}c-utility
   hooks:
   - name: disable-automatic-updates.service
     before:
@@ -137,6 +137,7 @@ spec:
       ExecStartPre=/usr/bin/systemctl mask --now update-engine.service
       ExecStartPre=/usr/bin/systemctl mask --now locksmithd.service
       ExecStart=/usr/bin/systemctl reset-failed update-engine.service
+---
 apiVersion: kops/v1alpha2
 kind: InstanceGroup
 metadata:
@@ -196,51 +197,6 @@ spec:
       cpu: "400m"
       memory: "1Gi"
     enforceNodeAllocatable: "pods"
-    featureGates:
-      ReadOnlyAPIDataVolumes: "false"
-  hooks:
-  - name: disable-automatic-updates.service
-    before:
-    - update-engine.service
-    manifest: |
-      Type=oneshot
-      ExecStartPre=/usr/bin/systemctl mask --now update-engine.service
-      ExecStartPre=/usr/bin/systemctl mask --now locksmithd.service
-      ExecStart=/usr/bin/systemctl reset-failed update-engine.service
----
-apiVersion: kops/v1alpha2
-kind: InstanceGroup
-metadata:
-  labels:
-    kops.k8s.io/cluster: ${CLUSTER_NAME}
-  name: app-nodes
-spec:
-  associatePublicIp: false
-  image: ${NODES_IMAGE_ID}
-  machineType: ${NODES_SERVER_TYPE}
-  maxPrice: "${NODES_MAX_PRICE}"
-  maxSize: ${NODES_MAX_SIZE}
-  minSize: ${NODES_MIN_SIZE}
-  nodeLabels:
-    kops.k8s.io/instancegroup: app-nodes
-  taints:
-  - dedicated=app:NoSchedule
-  role: Node
-  rootVolumeSize: 50
-  subnets:
-  - ${REGION}a-private
-  - ${REGION}b-private
-  - ${REGION}c-private
-  kubelet:
-    kubeReserved:
-      cpu: "300m"
-      memory: "768Mi"
-    systemReserved:
-      cpu: "300m"
-      memory: "768Mi"
-    enforceNodeAllocatable: "pods"
-    featureGates:
-      ReadOnlyAPIDataVolumes: "false"
   hooks:
   - name: disable-automatic-updates.service
     before:
