@@ -1,0 +1,208 @@
+apiVersion: kops/v1alpha2
+kind: Cluster
+metadata:
+  name: ${CLUSTER_NAME}
+spec:
+  docker:
+    ipMasq: true
+    ipTables: true
+  fileAssets:
+  - name: kubernetes-audit
+    path: /srv/kubernetes/audit.yaml
+    # which type of instances to appy the file
+    roles: [Master]
+    content: |
+      apiVersion: audit.k8s.io/v1beta1
+      kind: Policy
+      omitStages:
+        - RequestReceived
+      rules:
+        - level: Metadata
+  kubeAPIServer:
+    auditLogPath: /var/log/kube-apiserver-audit.log
+    auditLogMaxAge: 10 # num days
+    auditLogMaxBackups: 1 # the num of audit logs to retain
+    auditLogMaxSize: 100 # the max size in MB to retain
+    auditPolicyFile: /srv/kubernetes/audit.yaml
+    runtimeConfig:
+      settings.k8s.io/v1alpha1: "true"
+    admissionControl:
+    - PodPreset
+    - Initializers
+    - NamespaceLifecycle
+    - LimitRanger
+    - ServiceAccount
+    - PersistentVolumeLabel
+    - DefaultStorageClass
+    - DefaultTolerationSeconds
+    - MutatingAdmissionWebhook
+    - ValidatingAdmissionWebhook
+    - NodeRestriction
+    - ResourceQuota
+  additionalPolicies:
+    node: |-
+      [
+        {
+          "Effect": "Allow",
+          "Action": ["route53:*"],
+          "Resource": ["*"]
+        }
+      ]
+  api:
+    loadBalancer:
+      type: Public
+  authorization:
+    rbac: {}
+  channel: stable
+  cloudProvider: aws
+  configBase: s3://${KOPS_STATE_STORE_BUCKET}/${CLUSTER_NAME}
+  dnsZone: ${CLUSTER_NAME}
+  iam:
+    allowContainerRegistry: true
+    legacy: false
+  etcdClusters:
+  - etcdMembers:
+    - encryptedVolume: true
+      instanceGroup: master-${REGION}a
+      name: a
+    name: main
+  - etcdMembers:
+    - encryptedVolume: true
+      instanceGroup: master-${REGION}a
+      name: a
+    name: events
+  kubernetesApiAccess:
+  - 0.0.0.0/0
+  kubernetesVersion: ${K8S_VERSION}
+  masterPublicName: ${MASTER_PUBLIC_NAME}
+  networkCIDR: 172.20.0.0/16
+  networking:
+    weave:
+      mtu: 8912
+  nonMasqueradeCIDR: 200.64.0.0/10
+  sshAccess:
+  - 0.0.0.0/0
+  subnets:
+  - name: ${REGION}a-private
+    type: Private
+    zone: ${REGION}a
+  - name: ${REGION}b-private
+    type: Private
+    zone: ${REGION}b
+  - name: ${REGION}c-private
+    type: Private
+    zone: ${REGION}c
+  - name: ${REGION}a-public
+    type: Public
+    zone: ${REGION}a
+  - name: ${REGION}b-public
+    type: Public
+    zone: ${REGION}b
+  - name: ${REGION}c-public
+    type: Public
+    zone: ${REGION}c
+  topology:
+    bastion:
+      bastionPublicName: ${BASTION_PUBLIC_NAME}
+    dns:
+      type: Public
+    masters: private
+    nodes: private
+---
+apiVersion: kops/v1alpha2
+kind: InstanceGroup
+metadata:
+  labels:
+    kops.k8s.io/cluster: ${CLUSTER_NAME}
+  name: bastion-${REGION}a
+spec:
+  image: ${BASTION_IMAGE_ID}
+  machineType: ${BASTION_SERVER_TYPE}
+  maxSize: ${BASTION_MAX_SIZE}
+  minSize: $BASTION_MIN_SIZE}
+  nodeLabels:
+    kops.k8s.io/instancegroup: bastion-${REGION}
+  role: Bastion
+  rootVolumeSize: 8
+  subnets:
+  - ${REGION}a-utility
+  - ${REGION}b-utility
+  - ${REGION}c-utility
+  hooks:
+  - name: disable-automatic-updates.service
+    before:
+    - update-engine.service
+    manifest: |
+      Type=oneshot
+      ExecStartPre=/usr/bin/systemctl mask --now update-engine.service
+      ExecStartPre=/usr/bin/systemctl mask --now locksmithd.service
+      ExecStart=/usr/bin/systemctl reset-failed update-engine.service
+---
+apiVersion: kops/v1alpha2
+kind: InstanceGroup
+metadata:
+  labels:
+    kops.k8s.io/cluster: ${CLUSTER_NAME}
+  name: master-${REGION}a
+spec:
+  image: ${MASTER_IMAGE_ID}
+  machineType: ${MASTER_SERVER_TYPE}
+  maxSize: ${MASTER_MAX_SIZE}
+  minSize: ${MASTER_MIN_SIZE}
+  nodeLabels:
+    kops.k8s.io/instancegroup: master-${REGION}a
+  role: Master
+  rootVolumeSize: 50
+  subnets:
+  - ${REGION}a-private
+  kubelet:
+    featureGates:
+      ReadOnlyAPIDataVolumes: "false"
+  hooks:
+  - name: disable-automatic-updates.service
+    before:
+    - update-engine.service
+    manifest: |
+      Type=oneshot
+      ExecStartPre=/usr/bin/systemctl mask --now update-engine.service
+      ExecStartPre=/usr/bin/systemctl mask --now locksmithd.service
+      ExecStart=/usr/bin/systemctl reset-failed update-engine.service
+---
+apiVersion: kops/v1alpha2
+kind: InstanceGroup
+metadata:
+  labels:
+    kops.k8s.io/cluster: ${CLUSTER_NAME}
+  name: nodes
+spec:
+  associatePublicIp: false
+  image: ${NODES_IMAGE_ID}
+  machineType: ${NODES_SERVER_TYPE}
+  maxPrice: "${NODES_MAX_PRICE}"
+  maxSize: ${NODES_MAX_SIZE}
+  minSize: ${NODES_MIN_SIZE}
+  nodeLabels:
+    kops.k8s.io/instancegroup: nodes
+  role: Node
+  rootVolumeSize: 50
+  subnets:
+  - ${REGION}a-private
+  - ${REGION}b-private
+  - ${REGION}c-private
+  kubelet:
+    kubeReserved:
+      cpu: "400m"
+      memory: "1Gi"
+    systemReserved:
+      cpu: "400m"
+      memory: "1Gi"
+    enforceNodeAllocatable: "pods"
+  hooks:
+  - name: disable-automatic-updates.service
+    before:
+    - update-engine.service
+    manifest: |
+      Type=oneshot
+      ExecStartPre=/usr/bin/systemctl mask --now update-engine.service
+      ExecStartPre=/usr/bin/systemctl mask --now locksmithd.service
+      ExecStart=/usr/bin/systemctl reset-failed update-engine.service
